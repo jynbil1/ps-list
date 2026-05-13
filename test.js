@@ -30,6 +30,7 @@ test('main', async t => {
 			&& typeof x.memory === 'number'
 			&& (typeof x.uid === 'number' || x.uid === undefined)
 			&& typeof x.path === 'string'
+			&& Array.isArray(x.args)
 			&& (x.startTime instanceof Date || x.startTime === undefined)));
 
 		// Verify Date objects are valid (not Invalid Date)
@@ -68,6 +69,7 @@ test('custom binary', async t => {
 
 	if (!isWindows) {
 		t.is(record.cmd, `${nodeBinaryName} ${arguments_.join(' ')}`);
+		t.deepEqual(record.args, arguments_);
 		t.is(record.uid, process.getuid());
 		// Path can be empty (relative command) or absolute (CI environments)
 		t.true(typeof record.path === 'string', 'Path should be a string');
@@ -113,7 +115,7 @@ test('path resolution', async t => {
 
 	// Find any node process - should have path resolved
 	const nodeProcess = list.find(x => x.name === 'node' || x.name === nodeBinaryName);
-	if (nodeProcess) {
+	if (nodeProcess?.path) {
 		t.true(nodeProcess.path.includes('node'), 'Node process path should contain node');
 		// Verify path is not just the truncated comm
 		if (nodeProcess.path.startsWith('/')) {
@@ -139,6 +141,27 @@ test('large command line', async t => {
 		if (record) {
 			t.true(record.cmd.length > 9000, 'Should capture long command line');
 		}
+	} finally {
+		sleepForever.kill(9);
+		await once(sleepForever, 'exit');
+	}
+});
+
+test('linux arguments preserve spaces', async t => {
+	if (process.platform !== 'linux') {
+		t.pass('Linux argument test skipped on non-Linux');
+		return;
+	}
+
+	const arguments_ = ['./fixtures/sleep-forever.js', 'argument with spaces', '--flag=value'];
+	const sleepForever = childProcess.spawn(nodeBinaryName, arguments_);
+
+	try {
+		const list = await psList();
+		const record = list.find(process_ => process_.pid === sleepForever.pid);
+
+		t.truthy(record, 'Should find process with spaced arguments');
+		t.deepEqual(record.args, arguments_);
 	} finally {
 		sleepForever.kill(9);
 		await once(sleepForever, 'exit');

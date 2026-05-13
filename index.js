@@ -37,6 +37,31 @@ const makeStartTime = startTimeString => {
 	return Number.isNaN(parsedDate.getTime()) ? undefined : parsedDate;
 };
 
+const splitArgumentsString = argumentsString => {
+	const trimmedArgumentsString = argumentsString.trim();
+	return trimmedArgumentsString ? trimmedArgumentsString.split(/\s+/) : [];
+};
+
+const splitCommandLineArguments = commandLine => {
+	const trimmedCommandLine = commandLine.trim();
+
+	if (!trimmedCommandLine) {
+		return [];
+	}
+
+	const quotedPathMatch = trimmedCommandLine.match(/^"([^"]+)"(?:\s+(.*))?$/);
+	if (quotedPathMatch) {
+		return quotedPathMatch[2] ? splitArgumentsString(quotedPathMatch[2]) : [];
+	}
+
+	const firstSpaceIndex = trimmedCommandLine.indexOf(' ');
+	if (firstSpaceIndex === -1) {
+		return [];
+	}
+
+	return splitArgumentsString(trimmedCommandLine.slice(firstSpaceIndex + 1));
+};
+
 // Extract executable path from command line using filesystem validation only
 const extractExecutablePath = commandLine => {
 	if (!commandLine) {
@@ -96,6 +121,50 @@ const resolveExecutablePath = (operatingSystemPlatform, processId, commandLine) 
 	return extractExecutablePath(commandLine);
 };
 
+const readLinuxProcessArguments = processId => {
+	if (!processId) {
+		return undefined;
+	}
+
+	try {
+		const commandLineBuffer = fs.readFileSync(`/proc/${processId}/cmdline`, 'utf8');
+		const commandLineParts = commandLineBuffer.split('\0');
+
+		if (commandLineParts.at(-1) === '') {
+			commandLineParts.pop();
+		}
+
+		return commandLineParts.slice(1);
+	} catch {
+		return undefined;
+	}
+};
+
+const resolveProcessArguments = (operatingSystemPlatform, processId, commandLine, executablePath) => {
+	if (operatingSystemPlatform === 'linux') {
+		const linuxProcessArguments = readLinuxProcessArguments(processId);
+		if (linuxProcessArguments) {
+			return linuxProcessArguments;
+		}
+	}
+
+	if (!commandLine) {
+		return [];
+	}
+
+	if (executablePath && commandLine.startsWith(executablePath)) {
+		const argumentsString = commandLine.slice(executablePath.length).trim();
+		return argumentsString ? splitArgumentsString(argumentsString) : [];
+	}
+
+	if (executablePath && commandLine.startsWith(`"${executablePath}"`)) {
+		const argumentsString = commandLine.slice(executablePath.length + 2).trim();
+		return argumentsString ? splitArgumentsString(argumentsString) : [];
+	}
+
+	return splitCommandLineArguments(commandLine);
+};
+
 // Parse and validate numeric field with fallback
 const parseNumericField = (fieldValue, parserFunction = Number.parseInt, defaultValue = 0) => {
 	if (!fieldValue) {
@@ -139,6 +208,7 @@ const parseProcessFields = ({processId, parentProcessId, userId, cpuUsage, memor
 		memory: parsedMemoryUsagePercentage,
 		name: derivedProcessName,
 		path: resolvedExecutablePath,
+		args: resolveProcessArguments(process.platform, parsedProcessId, command, resolvedExecutablePath),
 		startTime: makeStartTime(startTimeString),
 		cmd: command || '',
 	};
